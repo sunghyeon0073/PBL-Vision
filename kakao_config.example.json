@@ -1,0 +1,7 @@
+{
+  "rest_api_key": "여기에_REST_API_키",
+  "redirect_uri": "https://localhost",
+  "client_secret": "여기에_클라이언트_시크릿",
+  "link_url": "https://connect.raspberrypi.com",
+  "friend_uuids": []
+}

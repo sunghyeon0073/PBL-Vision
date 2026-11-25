@@ -1,0 +1,23 @@
+# 비밀 정보 (절대 커밋 금지)
+kakao_config.json
+kakao_token.json
+.env
+
+# 실행 결과물
+violations/
+runs/
+*.mp4
+
+# 파이썬 / 가상환경
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# 변환 모델 (각자 export)
+*_ncnn_model/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
