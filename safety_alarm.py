@@ -7,7 +7,7 @@
             DISPLAY=:0 QT_QPA_PLATFORM=xcb python safety_alarm.py
 - 실행(Windows): cd C:/safety ; ./venv/Scripts/Activate.ps1 ; python safety_alarm.py
   (Windows에서는 릴레이 없이 감지 + 기록 + 카카오 알림만 동작)
-- 종료: 영상 창에서 q 키, 또는 터미널에서 Ctrl + C
+- 종료: 영상 창에서 q 키, 또는 터미널에서 Ctrl + C  /  f 키: 전체 화면
 """
 import csv
 import platform
@@ -21,6 +21,8 @@ from pathlib import Path
 
 import cv2
 from ultralytics import YOLO
+
+import hud
 
 try:
     import kakao_notify          # 카카오톡 알림 (없으면 알림 없이 동작)
@@ -153,6 +155,10 @@ def main():
     bad_count = good_count = 0
     alarm_start = last_snap = 0.0
     reasons = []
+    events, fps, last_loop, full = 0, 0.0, time.time(), False
+    WINDOW = "AI Safety Monitor"
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    cv2.resizeWindow(WINDOW, 960, 720)
 
     try:
         while True:
@@ -167,11 +173,12 @@ def main():
             ms = (time.time() - t0) * 1000
 
             # 클래스별 확신도 기준으로 다시 거르기
-            dets = []
+            dets, boxes = [], []
             for c, cf, xyxy in zip(result.boxes.cls, result.boxes.conf, result.boxes.xyxy):
                 n = names[int(c)]
                 if float(cf) >= CONF_TABLE[n]:
                     dets.append((n, xyxy.tolist()))
+                    boxes.append((n, float(cf), xyxy.tolist()))
 
             violation, now_reasons = check_violation(dets)
 
@@ -183,17 +190,39 @@ def main():
                 good_count += 1
                 bad_count = 0
 
-            view = result.plot()
-
-            if not alarm_on and bad_count >= ON_FRAMES:
+            # 경고 ON/OFF 판단
+            turn_on = not alarm_on and bad_count >= ON_FRAMES
+            turn_off = alarm_on and good_count >= OFF_FRAMES
+            if turn_on:
                 alarm_on = True
                 alarm_start = last_snap = time.time()
+                events += 1
+            elif turn_off:
+                alarm_on = False
+
+            # 화면(HUD) 그리기 — 카카오로 보내는 사진도 이 화면
+            loop_dt = time.time() - last_loop
+            last_loop = time.time()
+            fps = 0.9 * fps + 0.1 * (1 / loop_dt) if loop_dt > 0 else fps
+            dn = {d[0] for d in dets}
+            present = bool(dn)
+            view = hud.draw(frame, boxes, {
+                "alarm": alarm_on,
+                "reasons": reasons if alarm_on else now_reasons,
+                "progress": 0 if alarm_on else min(bad_count / ON_FRAMES, 1),
+                "fps": fps, "ms": ms, "camera": CAMERA, "events": events,
+                "alarm_sec": time.time() - alarm_start if alarm_on else 0,
+                "persons": sum(1 for d in dets if d[0] == "Person"),
+                "helmet": None if not present else not any("안전모" in r for r in now_reasons),
+                "vest": None if not present else not any("조끼" in r for r in now_reasons),
+            })
+
+            if turn_on:
                 set_relay(True)
                 print(f"[경고 ON] {', '.join(reasons)}")
                 t, img = save_snapshot(view, reasons, writer, f)
                 notify(f"[안전 경고]\n{t:%Y-%m-%d %H:%M:%S}\n{' / '.join(reasons)}", "ppe-" + "-".join(reasons), img)
-            elif alarm_on and good_count >= OFF_FRAMES:
-                alarm_on = False
+            elif turn_off:
                 set_relay(False)
                 dur = time.time() - alarm_start
                 writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -204,20 +233,14 @@ def main():
                 last_snap = time.time()
                 save_snapshot(view, reasons, writer, f)
 
-            # 화면 표시
-            if alarm_on:
-                text, color = "WARNING: " + ", ".join(
-                    {"안전모 미착용": "NO HELMET", "안전모 미착용": "NO HELMET",
-                     "안전조끼 미착용": "NO VEST", "안전조끼 미착용": "NO VEST"}[r]
-                    for r in reasons), (0, 0, 255)
-                text = "WARNING: " + ", ".join(sorted(set(text[9:].split(", "))))
-            else:
-                text, color = "OK", (0, 200, 0)
-            cv2.putText(view, f"{text}  {ms:.0f}ms", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-            cv2.imshow("Safety Monitor", view)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            cv2.imshow(WINDOW, view)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 break
+            if key == ord("f"):   # 전체 화면 켜기/끄기
+                full = not full
+                cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
+                                      cv2.WINDOW_FULLSCREEN if full else cv2.WINDOW_NORMAL)
     except KeyboardInterrupt:
         pass
     finally:
